@@ -899,3 +899,20 @@ Mekanisme autostart diterapkan dengan memanggil `/root/setup.sh` via directive `
   Alokasi subnet Network 3 (`short lease`, `long lease`, serta VIP `fixed address`) tetap bekerja stabil dan terhubung penuh ke gateway lokal pasca-restart.
 <br><br>
 ![](assets/10.png)
+
+## Soal 11
+![alt text](11.png)
+
+## Soal 12
+![alt text](12.png)
+![alt text](12(2).png)
+
+## Soal 13
+![alt text](image-3.png)
+
+## Soal 14
+![alt text](image-4.png)
+![alt text](image-5.png)
+
+## Soal 15
+![alt text](image-6.png)
