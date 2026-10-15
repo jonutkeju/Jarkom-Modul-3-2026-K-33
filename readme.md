@@ -900,19 +900,485 @@ Mekanisme autostart diterapkan dengan memanggil `/root/setup.sh` via directive `
 <br><br>
 ![](assets/10.png)
 
+---
+
 ## Soal 11
-![alt text](11.png)
+
+### A. Soal
+Konfigurasikan `utahime` (`10.80.1.2`) sebagai DNS Master dan `shoko` (`10.80.1.3`) sebagai DNS Slave untuk domain `jujutsu.Kel33.com`. Kedua skrip menyiapkan SOA, NS, forwarder `192.168.122.1`, serta transfer zona dari Master ke Slave.
+
+### B. Konfigurasi
+Pada `utahime`, `src/11.sh` memasang BIND9 dan menulis konfigurasi berikut ke `/etc/bind/named.conf.local`:
+
+```conf
+zone "jujutsu.Kel33.com" {
+  type master;
+  file "/etc/bind/db.jujutsu.Kel33.com";
+  allow-transfer { 10.80.1.3; };
+  also-notify { 10.80.1.3; };
+};
+```
+
+Buat `/etc/bind/db.jujutsu.Kel33.com`:
+
+```dns
+$TTL 86400
+@       IN SOA utahime.jujutsu.Kel33.com. root.jujutsu.Kel33.com. (
+            2026101501 ; serial
+            604800     ; refresh
+            86400      ; retry
+            2419200    ; expire
+            604800 )   ; negative cache
+@       IN NS  utahime.jujutsu.Kel33.com.
+@       IN NS  shoko.jujutsu.Kel33.com.
+@       IN A   10.80.1.2
+utahime IN A   10.80.1.2
+shoko   IN A   10.80.1.3
+gojo    IN A   10.80.1.4
+geto    IN A   10.80.4.20
+```
+
+Pada `shoko`, tambahkan ke `/etc/bind/named.conf.local`:
+
+```conf
+zone "jujutsu.Kel33.com" {
+  type slave;
+  masters { 10.80.1.2; };
+  file "/var/cache/bind/db.jujutsu.Kel33.com";
+};
+```
+
+Pasang paket `bind9 dnsutils` di kedua server, validasi, lalu restart layanan:
+
+```sh
+named-checkconf
+named-checkzone jujutsu.Kel33.com /etc/bind/db.jujutsu.Kel33.com
+systemctl restart bind9
+```
+
+`src/11.sh` membuat `/root/test_soal11.sh` di `itadori`. Untuk mengulang pembuktian setelah serial berubah, naikkan serial zona di `utahime`, restart/reload BIND, lalu jalankan ulang skrip tes; transfer dipicu oleh `also-notify` dan hanya `10.80.1.3` yang diizinkan melakukan transfer.
+
+### C. Pengujian
+
+* Periksa SOA dan NS dari client Divisi A atau B
+  ```sh
+  dig @10.80.1.2 jujutsu.Kel33.com SOA +short
+  dig @10.80.1.3 jujutsu.Kel33.com SOA +short
+  dig @10.80.1.2 jujutsu.Kel33.com NS +short
+  dig @10.80.1.3 jujutsu.Kel33.com NS +short
+  /root/test_soal11.sh
+  ```
+  Expected Output:
+  Skrip menampilkan NS, A record untuk `utahime`, `shoko`, `gojo`, serta serial SOA Master dan Slave. Status sukses muncul jika serial keduanya sama.
+
+  Membuktikan: Server Master dan Slave melayani zona yang sama.
+
+* Buktikan transfer otomatis setelah serial dinaikkan
+  ```sh
+  # Jalankan di utahime: naikkan serial, lalu reload zona
+  rndc reload
+  # Jalankan di itadori
+  /root/test_soal11.sh
+  ```
+  Expected Output:
+  `Master Serial` dan `Slave Serial` sama dan skrip melaporkan `[ SUCCESS ]`.
+
+  Membuktikan: Zona berhasil ditransfer dari `utahime` ke `shoko`.
+![](assets/11.png)
+<br><br>
+
+---
 
 ## Soal 12
-![alt text](12.png)
-![alt text](12(2).png)
+
+### A. Soal
+Tambahkan record domain utama yang menunjuk ke `gojo`, alias `www`, reverse DNS untuk IP `gojo`, serta DNS forwarder ke gateway internet `192.168.122.1`. Buktikan resolusi forward, reverse, dan akses nama domain internet dari client.
+
+### B. Konfigurasi
+`src/12.sh` memperbarui zona forward Master dengan A record apex menuju Gojo, CNAME `www`, dan serial `2026101502`:
+
+```dns
+@       IN A       10.80.1.4
+www     IN CNAME   jujutsu.Kel33.com.
+```
+
+Tambahkan zona reverse pada `utahime` di `/etc/bind/named.conf.local`:
+
+```conf
+zone "1.80.10.in-addr.arpa" {
+  type master;
+  file "/etc/bind/db.10.80.1";
+  allow-transfer { 10.80.1.3; };
+  also-notify { 10.80.1.3; };
+};
+```
+
+Buat `/etc/bind/db.10.80.1`:
+
+```dns
+$TTL 86400
+@       IN SOA utahime.jujutsu.Kel33.com. root.jujutsu.Kel33.com. (
+            2026101502 604800 86400 2419200 604800 )
+@       IN NS  utahime.jujutsu.Kel33.com.
+@       IN NS  shoko.jujutsu.Kel33.com.
+4       IN PTR gojo.jujutsu.Kel33.com.
+```
+
+Tambahkan zona reverse berikut ke `/etc/bind/named.conf.local` pada `shoko`:
+
+```conf
+zone "1.80.10.in-addr.arpa" {
+  type slave;
+  masters { 10.80.1.2; };
+  file "/var/cache/bind/db.10.80.1";
+};
+```
+
+Konfigurasi forwarder pada `/etc/bind/named.conf.options` di kedua server:
+
+```conf
+options {
+  directory "/var/cache/bind";
+  forwarders { 192.168.122.1; };
+  allow-query { any; };
+  auth-nxdomain no;
+  listen-on-v6 { any; };
+};
+```
+
+`src/12.sh` menulis opsi tersebut pada kedua DNS server, me-restart BIND, dan menjalankan `rndc reload`. Zona reverse juga dibuat sebagai slave di `shoko`.
+
+### C. Pengujian
+
+* Uji record A dan CNAME melalui kedua server
+  ```sh
+  dig @10.80.1.2 jujutsu.Kel33.com A +short
+  dig @10.80.1.2 www.jujutsu.Kel33.com CNAME +short
+  ```
+  Expected Output:
+  ```text
+  10.80.1.4
+  jujutsu.Kel33.com.
+  ```
+
+  Membuktikan: Domain utama mengarah ke `gojo` dan alias `www` merujuk ke domain utama.
+
+* Uji PTR dan forwarder internet dari client
+  ```sh
+  dig @10.80.1.2 jujutsu.Kel33.com A +short
+  dig @10.80.1.2 www.jujutsu.Kel33.com CNAME +short
+  dig @10.80.1.2 -x 10.80.1.4 +short
+  dig @10.80.1.2 google.com A +short
+  ping -c 2 google.com
+  /root/test_soal12.sh
+  ```
+  Expected Output:
+  Query PTR menghasilkan `gojo.jujutsu.Kel33.com.`; query `google.com` mengembalikan alamat IP dan ping berhasil dengan `0% packet loss` (jika ICMP diizinkan oleh tujuan).
+
+  Membuktikan: Reverse lookup bekerja dan client dapat memakai DNS lokal untuk meneruskan query internet ke gateway.
+![](assets/12-1.png)
+![](assets/12-2.png)
+<br><br>
+
+---
 
 ## Soal 13
-![alt text](image-3.png)
+
+### A. Soal
+Konfigurasikan MariaDB pada `yaga` (`10.80.4.30`) sebagai Master dan `inumaki` sebagai Slave. Skrip membuat database `db_shibuya_Kel33` dan tabel `request_logs` dengan kolom `client_ip`, `message`, dan `created_at`, lalu mereplikasi perubahan dari Master.
+
+### B. Konfigurasi
+Pasang `mariadb-server` pada kedua node. Pada `/etc/mysql/mariadb.conf.d/50-server.cnf` di `yaga`, atur di dalam bagian `[mysqld]`:
+
+```ini
+bind-address = 0.0.0.0
+server-id = 1
+log_bin = /var/log/mysql/mysql-bin.log
+expire_logs_days = 10
+max_binlog_size = 100M
+```
+
+Pada file yang sama di `inumaki`:
+
+```ini
+bind-address = 0.0.0.0
+server-id = 2
+read_only = ON
+```
+
+Restart MariaDB. Jalankan di Master:
+
+```sql
+CREATE DATABASE IF NOT EXISTS db_shibuya_Kel33;
+USE db_shibuya_Kel33;
+CREATE TABLE IF NOT EXISTS request_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    client_ip VARCHAR(45),
+    message VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+TRUNCATE TABLE request_logs;
+CREATE USER IF NOT EXISTS 'replica_user'@'%' IDENTIFIED BY 'CHANGE_ME_REPLICA_PASSWORD';
+GRANT REPLICATION SLAVE ON *.* TO 'replica_user'@'%';
+CREATE USER IF NOT EXISTS 'shibuya_user'@'10.80.4.%' IDENTIFIED BY 'CHANGE_ME_SHIBUYA_PASSWORD';
+GRANT ALL PRIVILEGES ON db_shibuya_Kel33.* TO 'shibuya_user'@'10.80.4.%';
+FLUSH PRIVILEGES;
+RESET MASTER;
+SHOW MASTER STATUS;
+```
+
+Ganti kedua nilai `CHANGE_ME_...` sebelum menjalankan skrip. `src/13.sh` menyiapkan Slave dengan `server-id=2`, membuat tabel awal, membaca `File` dan `Position` Master, lalu mengatur `CHANGE MASTER TO` dan menjalankan `START SLAVE`. IP Master yang dipakai skrip adalah `10.80.4.30`.
+
+```sql
+  # Jalankan di yaga untuk melihat posisi binlog
+  mariadb -u root -e 'SHOW MASTER STATUS'
+```
+
+Pada `inumaki`, jalankan dengan nilai file dan posisi yang dicatat:
+
+```sql
+CHANGE MASTER TO
+  MASTER_HOST='10.80.4.30',
+  MASTER_USER='replica_user',
+  MASTER_PASSWORD='CHANGE_ME_REPLICA_PASSWORD',
+  MASTER_LOG_FILE='<file-dari-show-master-status>',
+  MASTER_LOG_POS=<posisi-dari-show-master-status>;
+START SLAVE;
+```
+
+Skrip memberi akun aplikasi akses dari `10.80.4.%`; akun replikasi dibuat dari host `%`. Batasi port MariaDB `3306` melalui firewall jika koneksi replikasi juga harus dibatasi ke Network 4. Perhatikan bahwa skrip mereset binlog Master dan mengosongkan tabel saat setup, sehingga jangan jalankan ulang pada database berisi data yang perlu dipertahankan.
+
+### C. Pengujian
+
+* Periksa status replikasi di `inumaki`
+  ```sh
+  # Jalankan di inumaki; skrip ini juga menguji insert dan replikasi
+  /root/test_soal13.sh
+  ```
+  Expected Output:
+  Skrip melaporkan `Slave_IO_Running: Yes` dan `Slave_SQL_Running: Yes`, lalu memasukkan data uji dari Master `10.80.4.30` dan mencari pesan yang sama di Slave.
+
+  Membuktikan: Slave terhubung ke Master dan siap menerapkan perubahan binlog.
+
+* Verifikasi baris uji pada Slave setelah skrip dijalankan
+  ```sh
+  mariadb -u root -D db_shibuya_Kel33 -e "SELECT * FROM request_logs ORDER BY id DESC LIMIT 1;"
+  ```
+  Expected Output:
+  Baris `uji-replikasi` yang baru dimasukkan muncul di query Slave tanpa insert manual.
+
+  Membuktikan: Perubahan database direplikasi secara realtime dari `yaga` ke `inumaki`.
+![](assets/13.png)
+<br><br>
+
+---
 
 ## Soal 14
-![alt text](image-4.png)
-![alt text](image-5.png)
+
+### A. Soal
+`src/14.sh` memasang Nginx/PHP-FPM pada frontend `maki` (`10.80.4.11`) dan `panda` (`10.80.4.12`), serta API `nanami` (`10.80.4.21`), `todo` (`10.80.4.22`), dan `kirara` (`10.80.4.23`). Frontend hanya mengizinkan Gojo (`10.80.1.4`); API hanya mengizinkan Geto (`10.80.4.20`). API PHP mencatat alamat client dan pesan berisi hostname worker ke `db_shibuya_Kel33.request_logs` pada Yaga (`10.80.4.30`).
+
+### B. Konfigurasi
+Skrip memasang `nginx php-fpm` untuk frontend. Pada `maki` dan `panda`, konten diletakkan di `/var/www/frontend`; halaman menampilkan hostname worker:
+
+```php
+<?php
+header('Content-Type: text/plain');
+echo gethostname(), "\n";
+```
+
+Konfigurasi virtual host frontend yang digunakan pada kedua node:
+
+```nginx
+server {
+  listen 80 default_server;
+  server_name _;
+  root /var/www/frontend;
+  index index.php index.html;
+
+  allow 10.80.1.4;
+  deny all;
+
+  location / {
+    try_files $uri $uri/ =404;
+  }
+  location ~ \.php$ {
+    include snippets/fastcgi-php.conf;
+    fastcgi_pass unix:/run/php/php-fpm.sock;
+  }
+}
+```
+
+Sesuaikan path socket PHP-FPM dengan versi yang terpasang, misalnya `/run/php/php8.2-fpm.sock`, lalu validasi dengan `nginx -t` dan restart Nginx/PHP-FPM.
+
+Pada ketiga worker API, skrip membuat `/var/www/api/index.php` yang menyimpan `client_ip` dan pesan nama worker ke MariaDB:
+
+```php
+<?php
+$host = '10.80.4.30';
+$db   = 'db_shibuya_Kel33';
+$user = 'shibuya_user';
+$pass = 'CHANGE_ME_SHIBUYA_PASSWORD';
+$client_ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'];
+$hostname = gethostname();
+try {
+  $pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $user, $pass);
+  $stmt = $pdo->prepare("INSERT INTO request_logs (client_ip, message) VALUES (?, ?)");
+  $stmt->execute([$client_ip, "API Request processed by worker: $hostname"]);
+  echo json_encode(["status" => "success", "worker" => $hostname,
+    "client_ip" => $client_ip, "message" => "Log successfully recorded to DB yaga"]);
+} catch (PDOException $e) {
+  http_response_code(500);
+  echo json_encode(["status" => "error", "message" => $e->getMessage()]);
+}
+```
+
+Konfigurasikan virtual host API pada ketiga worker:
+
+```nginx
+server {
+  listen 80 default_server;
+  server_name _;
+  root /var/www/api;
+  index index.php;
+
+  allow 10.80.4.20;
+  deny all;
+  location / {
+    try_files $uri $uri/ =404;
+  }
+  location ~ \.php$ {
+    include snippets/fastcgi-php.conf;
+    fastcgi_pass unix:/run/php/php-fpm.sock;
+  }
+}
+```
+
+Skrip memasang `php-mysql` pada API worker, mengaktifkan PHP-FPM, dan menerapkan pembatasan Nginx `allow`/`deny`. Frontend mengizinkan `10.80.1.4`; API mengizinkan `10.80.4.20`. Kredensial `CHANGE_ME_SHIBUYA_PASSWORD` harus sama dengan nilai yang dipasang pada Yaga.
+
+Pada API worker, konfigurasi Nginx menggunakan `allow 10.80.4.20; deny all;`.
+
+### C. Pengujian
+
+* Pastikan worker menolak client yang mengakses langsung
+  ```sh
+  # Jalankan dari itadori (akses langsung ke worker harus ditolak)
+  curl -i http://10.80.4.11/
+  curl -i http://10.80.4.21/
+  ```
+  Expected Output:
+  Nginx mengembalikan `HTTP/1.1 403 Forbidden`.
+
+  Membuktikan: Client tidak dapat melewati batas akses langsung ke worker.
+
+* Uji jalur proxy yang diizinkan
+  ```sh
+  # Jalankan dari gojo ke frontend, lalu dari geto ke API
+  curl http://10.80.4.11/
+  curl http://10.80.4.21/
+  ```
+  Expected Output:
+  Frontend menampilkan `Hello from Frontend Worker: maki`; API menghasilkan JSON sukses dengan `worker: nanami` dan request masuk ke tabel `request_logs` di Yaga.
+
+  Membuktikan: Proxy dapat mengakses worker melalui jalur yang diizinkan dan API menyimpan log ke database.
+![](assets/14-1.png)
+![](assets/14-2.png)
+<br><br>
+
+---
 
 ## Soal 15
-![alt text](image-6.png)
+
+### A. Soal
+Konfigurasikan Nginx pada `geto` sebagai Load Balancer internal dengan upstream `api_cluster`. Gunakan Weighted Round Robin dengan bobot `3:1` untuk `nanami` dan `todo`, lalu ukur jumlah respons masing-masing worker dari Data Center.
+
+### B. Konfigurasi
+Pada `/etc/nginx/sites-available/load-balancer` di `geto` (`10.80.4.20`):
+
+```nginx
+upstream api_cluster {
+  server 10.80.4.21:80 weight=3 max_fails=0;
+  server 10.80.4.22:80 weight=1 max_fails=0;
+}
+
+server {
+  listen 80;
+  server_name _;
+
+  location / {
+    proxy_pass http://api_cluster;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+}
+```
+
+Aturan upstream default Nginx adalah Weighted Round Robin. Izinkan port `80` pada `geto` dari `gojo` dan Network 4 untuk pengujian internal; worker API tetap hanya mengizinkan sumber `geto`. Validasi dan muat ulang konfigurasi dengan `nginx -t && systemctl reload nginx`.
+
+### C. Pengujian
+
+* Ukur distribusi 12 request ke Geto dari node Network 4
+  ```sh
+  /root/test_soal15.sh
+  ```
+  Expected Output:
+  Skrip mengirim 12 request ke `http://10.80.4.20/` dan melaporkan jumlah respons `nanami` serta `todo`; dengan Weighted Round Robin bobot `3:1`, hasil yang diharapkan sekitar 9:3.
+
+  Membuktikan: `geto` membagi beban API menurut bobot Weighted Round Robin yang dikonfigurasi.
+![](assets/15.png)
+<br><br>
+
+---
+
+## Soal 16
+
+### A. Soal
+Konfigurasikan `gojo` (`10.80.1.4`) sebagai reverse proxy untuk `jujutsu.Kel33.com` dan `www.jujutsu.Kel33.com`. Root dibagi Round Robin ke `maki`/`panda` (`10.80.4.11`/`.12`); path `/api` diteruskan ke Geto (`10.80.4.20`).
+
+### B. Konfigurasi
+Pada `/etc/nginx/sites-available/jujutsu` di `gojo` (`10.80.1.4`), lalu tautkan ke `sites-enabled` seperti pada `src/16.sh`:
+
+```nginx
+upstream web_frontend {
+  server 10.80.4.11:80 max_fails=0;
+  server 10.80.4.12:80 max_fails=0;
+}
+
+upstream api_backend {
+  server 10.80.4.20:80 max_fails=0;
+}
+
+server {
+  listen 80;
+  server_name jujutsu.Kel33.com www.jujutsu.Kel33.com;
+
+  location /api {
+    proxy_pass http://api_backend/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+  location / {
+    proxy_pass http://web_frontend;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+}
+```
+
+Round Robin merupakan metode default Nginx. Skrip menambahkan mapping `10.80.1.4 jujutsu.Kel33.com www.jujutsu.Kel33.com` ke `/etc/hosts` pada `itadori` untuk memastikan domain mengarah ke Gojo.
+
+### C. Pengujian
+
+* Uji routing dari client Divisi A atau B
+  ```sh
+  /root/test_soal16.sh
+  ```
+  Expected Output:
+  Script meminta root dan `/api` masing-masing dua kali. Root harus menampilkan konten frontend `maki` atau `panda`; `/api` harus menampilkan worker API di belakang Geto, yaitu `nanami` atau `todo`.
+
+  Membuktikan: Gojo menjadi pintu masuk tunggal dan menerapkan Path-Based Routing ke cluster frontend maupun Load Balancer API.
+![](assets/16.jpeg)
+<br><br>

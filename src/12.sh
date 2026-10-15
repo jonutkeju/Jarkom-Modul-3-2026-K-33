@@ -1,5 +1,4 @@
 #UTAHIME
-#!/bin/sh
 cat << 'EOF' > /root/setup.sh
 #!/bin/sh
 while ! ping -c 1 -W 1 10.80.1.1 >/dev/null 2>&1; do sleep 1; done

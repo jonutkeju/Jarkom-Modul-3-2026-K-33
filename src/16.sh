@@ -94,7 +94,7 @@ chmod +x /root/setup.sh
 
 
 #GOJO
-#cat << 'EOF' > /root/setup.sh
+cat << 'EOF' > /root/setup.sh
 #!/bin/sh
 
 # 1. IP & Route Persistent

@@ -51,7 +51,7 @@ chmod +x /root/setup.sh
 /root/setup.sh
 
 #TODO
-ccat << 'EOF' > /root/setup.sh
+cat << 'EOF' > /root/setup.sh
 #!/bin/sh
 
 # 1. Network Persistent
